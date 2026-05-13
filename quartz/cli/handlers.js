@@ -453,7 +453,7 @@ export async function handleBuild(argv) {
       return serve()
     })
 
-    server.listen(argv.port)
+    server.listen(argv.port, "0.0.0.0")
     const wss = new WebSocketServer({ port: argv.wsPort })
     wss.on("connection", (ws) => connections.push(ws))
     console.log(
