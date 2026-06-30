@@ -24,21 +24,21 @@ TBD
 # 3. What it solves (Why)
 TBD
 # 4. Methodology (How)
-Methodology with consistent example
+Explain using 1 consistent example. Focus on 3 parts (if applicable): System/Memory structure, Retrieval flow, updating flow.
 
 # 5. Benchmarks
-
+Using the table format
 ## 5.1. Other baselines:
 TBD
 ## 5.2. Benchmarks:
 TBD
 ## 5.3. Notable Results:
 # 6. Strengths
-TBD
+Stay concise
 # 7. Gaps
-TBD
+Stay concise and propose some future gaps
 # 8. Highlights:
-TBD
+Leave blank
 
 
 

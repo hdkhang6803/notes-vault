@@ -4,6 +4,17 @@ Date: "2026"
 Authors: Ryan Wei Heng Quek, Sanghyuk Lee, Alfred Wei Lun Leong, Arun Verma, Alok Prakash, Nancy F. Chen, Bryan Kian Hsiang Low, Daniela Rus, Armando Solar-Lezama
 Venue: CATS@ICML26 (under review)
 Paper: "MEMO: Memory as a Model"
+Memory type:
+  - Parametric
+Agent env: 2-model pipeline
+Record format: Parameters
+Memory architecture:
+  - LLM as Memory
+Tackle Module:
+  - Memory management
+Need offline initialization: true
+Fine-tuning?: true
+Other tags:
 ---
 # 1. Terminology
 

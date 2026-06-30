@@ -5,7 +5,7 @@ Authors: Yiming Xiong, Shengran Hu, Jeff Clune (University of British Columbia /
 Venue:
 Paper: "A Systematic Literature Review of Agentic AI: Definitions, Architectures, and Challenges"
 ---
-## 1. Terminology
+# 1. Terminology
 
 | **Term**                       | Definition                                                                                                                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -21,8 +21,7 @@ Paper: "A Systematic Literature Review of Agentic AI: Definitions, Architectures
 | **Resilience Benchmark**       | Proposed evaluation paradigm measuring agent recovery rate from induced environmental errors (e.g., Chaos Engineering), contrasted with static accuracy metrics                |
 
 ---
-
-## 2. Categories
+# 2. Categories
 
 Papers are classified along two axes: the five **research fields** of the taxonomy, and the **contribution type** × **research gap** matrix used in the intersection analysis.
 
@@ -42,7 +41,7 @@ Papers are classified along two axes: the five **research fields** of the taxono
 
 ---
 
-## 3. Review Protocol
+# 3. Review Protocol
 ![[Agentic-AI.pdf#page=4&rect=33,350,543,715&color=yellow|Agentic-AI, p.36179]]
 
 **Research Questions:**

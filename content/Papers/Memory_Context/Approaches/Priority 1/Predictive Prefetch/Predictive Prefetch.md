@@ -4,6 +4,17 @@ Date: "2026"
 Authors: Wuyang Zhang, Shichao Pei
 Venue: ICML
 Paper: Predictive Prefetching for Retrieval-Augmented Generation
+Memory type:
+  - Token-level
+Agent env: Single agent
+Record format:
+Memory architecture:
+Tackle Module:
+  - Proactive Retrieval
+Need offline initialization: false
+Fine-tuning?: true
+Other tags:
+  - Multi-model prediction
 ---
 # 1. Terminology
 
@@ -265,5 +276,86 @@ $$ ∇ϕ​J=E_{s∼ρ​}[∇_ϕ​logπ_ϕ​(a∣s)⋅R(s,a)]$$
 
 > [!PDF|255, 208, 0] [[Predictive Prefetch.pdf#page=2&annotation=991R|Predictive Prefetch, p.2]]
 > > these same signals encode retrieval intent and can be leveraged to infer the retrieval query itself.
+
+
+
+ **Hidden States H_t — from the Residual Stream**
+
+In a standard transformer decoder, after each attention + FFN sublayer with residual connections:
+
+$$\mathbf{h}_t^{(l)} = \text{LayerNorm}\left(\mathbf{h}_t^{(l-1)} + \text{Attn}^{(l)}(\mathbf{h}_t^{(l-1)}) + \text{FFN}^{(l)}(\cdot)\right)$$
+
+The predictor extracts $\mathbf{h}_t^{(l)}$ for all $l \in \mathcal{L}$ and stacks them across a 16-token sliding window:
+
+$$\mathbf{H}_t = \left[\mathbf{h}_{t-15}^{(\cdot)}, \ldots, \mathbf{h}_t^{(\cdot)}\right] \in \mathbb{R}^{16 \times |\mathcal{L}| \times d_{\text{model}}}$$
+
+> **Why this works.** The residual stream at 30–45% depth encodes semantic abstractions — entity types, concept boundaries, knowledge transitions — rather than surface syntax (early layers) or output-distribution fitting (final layers). The _rate of change_ across the 16-token window, i.e. $|\mathbf{h}_t^{(l)} - \mathbf{h}_{t-k}^{(l)}|_2$ for small k, spikes when the model crosses a knowledge boundary, several tokens before entropy rises in the output.
 > 
+> 🔵 **Design rationale.** The 16-token window is long enough to capture trajectory trends (rising vs. stable uncertainty) but short enough to remain computationally negligible. The paper reports hidden state dynamics as the single highest-importance signal at 21.8% of total predictive weight (Table 12).
+
+---
+
+ **Attention Weights A_t — from the Softmax Scores**
+
+Standard scaled dot-product attention for head h at layer l:
+
+$$\mathbf{A}_t^{(l,h)} = \text{softmax}\left(\frac{\mathbf{Q}_t^{(l,h)} \left(\mathbf{K}_{1:t}^{(l,h)}\right)^\top}{\sqrt{d_k}}\right) \in \mathbb{R}^{t}$$
+
+The predictor extracts the full attention weight matrix across all heads and selected layers:
+
+$$\mathbf{A}_t = \{\mathbf{A}_t^{(l,h)}\}_{l \in \mathcal{L},, h \in [n_H]} \in \mathbb{R}^{|\mathcal{L}| \times n_H \times t}$$
+
+Three derived statistics are then computed from these raw weights:
+
+$$H_{\text{attn}}^{(l,h)} = -\sum_{i=1}^{t} A_{t,i}^{(l,h)} \log A_{t,i}^{(l,h)} \quad \text{(attention entropy per head)}$$
+
+$$r_{\text{focus}}^{(l,h)} = \frac{\sum_{i \in \text{retrieved}} A_{t,i}^{(l,h)}}{\sum_{i \in \text{generated}} A_{t,i}^{(l,h)}} \quad \text{(retrieved vs. generated focus ratio)}$$
+
+$$r_{\text{self/cross}}^{(l,h)} = \frac{\sum_{i \leq t_0} A_{t,i}^{(l,h)}}{\sum_{i > t_0} A_{t,i}^{(l,h)}} \quad \text{(self vs. cross attention ratio)}$$
+
+> **Why this works.** When the model is confident and grounded, attention concentrates on a small set of relevant tokens — low $H_{\text{attn}}$. As the model approaches a knowledge gap, attention disperses: it "searches" the context without finding a clear anchor. This scatter pattern is a reliable early-warning signal, appearing several tokens before entropy rises in the output distribution.
 > 
+> 🔵 **Design rationale.** The 35% depth layer shows peak Pearson correlation of **0.42** with entropy spikes 10 tokens later (Appendix F). Combined with hidden states, attention patterns contribute **17.6%** of total predictive importance (Table 12).
+
+---
+ **Value Vectors V_t — from the Attention Output**
+
+After computing attention weights, the value projection produces:
+
+$$\mathbf{v}_t^{(l)} = \sum_{i=1}^{t} A_{t,i}^{(l)} \cdot \mathbf{V}_i^{(l)} \in \mathbb{R}^{d_v}$$
+
+where $\mathbf{V}_i^{(l)} = \mathbf{W}_V^{(l)} \mathbf{h}_i^{(l-1)}$ is the value projection of token i. The predictor tracks temporal dynamics of these vectors:
+
+$$\Delta \mathbf{v}_t^{(l)} = \left|\mathbf{v}_t^{(l)} - \mathbf{v}_{t-1}^{(l)}\right|_2 \quad \text{(value norm change)}$$
+
+$$\mathbf{V}_t = \{\mathbf{v}_t^{(l)}, \Delta\mathbf{v}_t^{(l)}, \hat{\mathbf{v}}_t^{(l)}\}_{l \in \mathcal{L}}$$
+
+where $\hat{\mathbf{v}}_t^{(l)} = \mathbf{v}_t^{(l)} / |\mathbf{v}_t^{(l)}|$ captures directional shifts in the value representation.
+
+> **Why this works.** Value vectors encode _what information is actually being passed forward_ through the network. $\Delta\mathbf{v}_t^{(l)}$ spikes specifically at the transition from factual recall (stable, high-norm values grounded in stored knowledge) to multi-step reasoning (shifting values as the model constructs intermediate inferences). This spike is distinct from attention entropy changes and provides a complementary signal about information flow rather than attention allocation.
+> 
+> 🔵 **Design rationale.** Value vector gradients rank third in importance at **14.2%** (Table 12), behind hidden states and attention entropy. Critically they are already computed during the LLM forward pass — extraction adds only a norm computation, contributing to the overall 1.2ms overhead for neural prediction.
+
+---
+
+ **Output Distribution Statistics o_t — from the Final Softmax**
+
+After the final layer and the language model head:
+
+$$\mathbf{p}_t = \text{softmax}\left(\mathbf{W}_{\text{LM}} \mathbf{h}_t^{(L)}\right) \in \mathbb{R}^{|V|}$$
+
+Three scalar features are extracted:
+
+$$H(\mathbf{p}_t) = -\sum_{w \in V} p_t(w) \log p_t(w) \quad \text{(token entropy)}$$
+
+$$M_k = p_t(w_{(1)}) - p_t(w_{(k)}) \quad \text{(top-k margin)}$$
+
+$$\tau = \sum_{w \notin \text{top-}k} p_t(w) \quad \text{(tail mass)}$$
+
+These are collected into $\mathbf{o}_t \in \mathbb{R}^{32}$ and concatenated _after_ the encoder — directly at the prediction head — rather than being fed into the encoder alongside H_t, A_t, V_t.
+
+$$\hat{p}_t = \sigma\left(\mathbf{W}_p \cdot [\mathbf{z}_t;, \mathbf{o}_t] + b_p\right)$$
+
+> **Why this works.** Output entropy is the baseline signal used by reactive systems like DRAGIN and FLARE. It reflects uncertainty that has _already materialized_ in the distribution. The predictor uses it as a calibration signal — it tells the model "here is what uncertainty looks like right now" — while H_t, A_t, V_t tell it "here is what uncertainty will look like in Δ tokens." The paper demonstrates this directly: output entropy alone gives AUROC 0.66; adding the internal signals raises it to 0.81.
+> 
+> 🔵 **Design rationale.** Injecting o_t at the head rather than the encoder keeps the encoder focused on learning the internal dynamics that _precede_ uncertainty, without it being distracted by the surface-level uncertainty signal that already exists.

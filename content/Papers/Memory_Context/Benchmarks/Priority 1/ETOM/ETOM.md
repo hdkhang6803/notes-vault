@@ -48,13 +48,13 @@ Paper: "ETOM: A Five-Level Benchmark for Evaluating Tool Orchestration within th
 
 ## 2.2. Five-Level Curriculum Breakdown
 
-|Level|Key Challenge|# Tasks|Avg. Plan Length|Avg. Servers|Metric|
-|---|---|---|---|---|---|
-|**L1: Direct Retrieval**|Foundational tool identification with explicit tool names|781|1.00|1.00|EM|
-|**L2: Context-Aware Retrieval**|Disambiguation among functionally equivalent tools|773|1.00|1.00|EM against set|
-|**L3: Intra-Server Chaining**|Sequential orchestration, data flow, dependency ordering|327|2.87|1.00|Node Set EM, F1|
-|**L4: Cross-Server Chaining**|Multi-server orchestration, cross-domain planning|103|3.83|3.78|Node Set EM, F1|
-|**L5: Robust Rejection**|Capability gap detection, out-of-scope rejection|91|0.00|0.00|Exact Rejection Match|
+| Level                           | Key Challenge                                             | # Tasks | Avg. Plan Length | Avg. Servers | Metric                |
+| ------------------------------- | --------------------------------------------------------- | ------- | ---------------- | ------------ | --------------------- |
+| **L1: Direct Retrieval**        | Foundational tool identification with explicit tool names | 781     | 1.00             | 1.00         | EM                    |
+| **L2: Context-Aware Retrieval** | Disambiguation among functionally equivalent tools        | 773     | 1.00             | 1.00         | EM against set        |
+| **L3: Intra-Server Chaining**   | Sequential orchestration, data flow, dependency ordering  | 327     | 2.87             | 1.00         | Node Set EM, F1       |
+| **L4: Cross-Server Chaining**   | Multi-server orchestration, cross-domain planning         | 103     | 3.83             | 3.78         | Node Set EM, F1       |
+| **L5: Robust Rejection**        | Capability gap detection, out-of-scope rejection          | 91      | 0.00             | 0.00         | Exact Rejection Match |
 
 ## 2.3. Equal Function Set Statistics
 

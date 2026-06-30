@@ -4,6 +4,18 @@ Date: "2026"
 Authors: Bufang Yang, Lilin Xu, Liekang Zeng, Kaiwei Liu, Siyang Jiang, Wenrui Lu, Hongkai Chen, Xiaofan Jiang, Guoliang Xing, Zhenyu Yan
 Venue: NeurIPS
 Paper: "ContextAgent: Context-Aware Proactive LLM Agents with Open-World Sensory Perceptions"
+Memory type:
+  - Token-level
+Agent env: Single agent
+Record format: Text
+Memory architecture:
+  - 2-tier
+Tackle Module:
+  - Proactive Generation
+  - Multi-sensory input
+Need offline initialization: false
+Fine-tuning?: true
+Other tags:
 ---
 # 1. Terminology
 
