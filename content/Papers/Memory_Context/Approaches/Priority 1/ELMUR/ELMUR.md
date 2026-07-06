@@ -69,52 +69,76 @@ The two tracks are coupled only through cross-attention: tokens read from memory
 ### 4.2 Retrieve Flow (mem2tok) — how do tokens pull information out of memory?
 
 Self-attention with relative positional encoding and a causal mask first handles local, within-segment dependencies:
-
-hsa=AddNorm(x+SelfAttention(x))h_{sa} = \text{AddNorm}(x + \text{SelfAttention}(x))hsa​=AddNorm(x+SelfAttention(x))
-
-Long-range context then comes from memory instead of a longer window — tokens query memory via mem2tok, with memory embeddings acting as keys and values:
-
-hmem2tok=AddNorm(hsa+CrossAttention(Q=hsa,K=m,V=m))h_{mem2tok} = \text{AddNorm}(h_{sa} + \text{CrossAttention}(Q=h_{sa}, K=m, V=m))hmem2tok​=AddNorm(hsa​+CrossAttention(Q=hsa​,K=m,V=m))
-
+$$
+h_{sa} = \text{AddNorm}(x + \text{SelfAttention}(x))
+$$
+Long-range context then comes from memory. Tokens query memory via mem2tok, with memory embeddings acting as keys and values:
+$$
+h_{mem2tok} = \text{AddNorm}(h_{sa} + \text{CrossAttention}(Q=h_{sa}, K=m, V=m))
+$$
 followed by a DeepSeek-MoE feed-forward block:
+$$
+h = \text{AddNorm}(h_{mem2tok} + \text{FFN}(h_{mem2tok}))
+$$
+> **Running example continued.** By segment M+2, several of the layer's slots hold blended content from earlier segments. A token processed in segment M+2 queries all M slots through mem2tok ,including the long-stale slot 1 from the very first segment, allowing an early cue to influence a decision made far outside the model's L-token attention window.
 
-h=AddNorm(hmem2tok+FFN(hmem2tok))h = \text{AddNorm}(h_{mem2tok} + \text{FFN}(h_{mem2tok}))h=AddNorm(hmem2tok​+FFN(hmem2tok​))
-
-> **Running example continued.** By segment M+2, several of the layer's slots hold blended content from earlier segments (see §4.4). A token processed in segment M+2 queries all M slots through mem2tok — including the long-stale slot 1 from the very first segment — allowing an early cue to influence a decision made far outside the model's L-token attention window.
-
-> [!design-rationale] The authors swap the usual MLP-based FFN (as in Decision Transformer) for a DeepSeek-MoE FFN, following DeepSeek-V3's design, to gain parameter efficiency and specialization without proportional compute cost — this is what keeps ELMUR's per-step latency below RATE and DT despite its added memory machinery.
+> [!design-rationale] The authors swap the usual MLP-based FFN (as in Decision Transformer) for a DeepSeek-MoE FFN, following DeepSeek-V3's design, to gain parameter efficiency and specialization without proportional compute cost
+>  this is what keeps ELMUR's per-step latency below RATE and DT despite its added memory machinery.
 
 ### 4.3 Update/Write Flow (tok2mem + LRU) — how does memory get refreshed without simply overwriting itself?
 
 After a segment is processed, token states update memory through tok2mem (same cross-attention mechanism, roles reversed, non-causal mask, reversed relative bias):
+$$
+\begin{gathered}
+m_{tok2mem} = \text{AddNorm}(m + \text{CrossAttention}(Q=m, K=h', V=h')) \\ m_{new} = \text{AddNorm}(m_{tok2mem} + \text{FFN}(m_{tok2mem}))
+\end{gathered}
+$$
+$m_{new}$ is a _candidate_ update.
+It is merged into existing slots via the LRU rule: while empty slots remain, $m_{new}$ is written by full replacement; once all slots are full, the least-recently-used slot (smallest anchor) is refreshed by convex blend:
+$$
+m^{i+1}_j = \lambda\, m^{i+1}_{new_j} + (1-\lambda)\, m^i_j
+$$
+> **Running example continued.** Segment 1 writes into empty slot 1 by full replacement (anchor set to K−1). Segment 2 fills slot 2 (anchor 2K−1), and so on until segment M fills the last slot. From segment M+1 onward all slots are full, so the least-recently-used slot (slot 1, with the smallest anchor) is refreshed via convex blending: $m^{[M+1]}_1 = λ·m_{new} + (1−λ)·m^{[1]}_1$
 
-mtok2mem=AddNorm(m+CrossAttention(Q=m,K=h′,V=h′))m_{tok2mem} = \text{AddNorm}(m + \text{CrossAttention}(Q=m, K=h', V=h'))mtok2mem​=AddNorm(m+CrossAttention(Q=m,K=h′,V=h′)) mnew=AddNorm(mtok2mem+FFN(mtok2mem))m_{new} = \text{AddNorm}(m_{tok2mem} + \text{FFN}(m_{tok2mem}))mnew​=AddNorm(mtok2mem​+FFN(mtok2mem​))
+> [!design-rationale] Filling empty slots first before blending lets the model use its full memory budget before any information is diluted. Early segments are stored losslessly, and only once capacity is exhausted does the model trade stability against plasticity via λ.
 
-`m_new` is a _candidate_ update — it is not written directly into memory. Instead it is merged into existing slots via the LRU rule: while empty slots remain, `m_new` is written by full replacement; once all slots are full, the least-recently-used slot (smallest anchor) is refreshed by convex blend instead of being overwritten outright:
-
-mji+1=λ mnewi+1+(1−λ) mjim^{i+1}_j = \lambda\, m^{i+1}_{new} + (1-\lambda)\, m^i_jmji+1​=λmnewi+1​+(1−λ)mji​
-
-> **Running example continued.** Segment 1 writes into empty slot 1 by full replacement (anchor set to K−1). Segment 2 fills slot 2 (anchor 2K−1), and so on until segment M fills the last slot. From segment M+1 onward all slots are full, so the least-recently-used slot — slot 1, with the smallest anchor — is refreshed via convex blending: `m^{[M+1]}_1 = λ·m_new + (1−λ)·m^{[1]}_1`, combining the new segment's content with what was already there rather than discarding it.
-
-> [!design-rationale] Filling empty slots first before blending lets the model use its full memory budget before any information is diluted — early segments are stored losslessly, and only once capacity is exhausted does the model trade stability against plasticity via λ.
-
-### 4.4 Relative Bias — resolving ambiguous absolute positions across segments
-
-> **Running example continued.** By segment M+2, slot 1 already holds a blend from segment M+1 with anchor (M+1)K−1. A token in the current segment sitting at absolute position t needs to know _how long ago_ that slot was last touched, not just _where_ it sits in absolute terms — since positions repeat every segment.
+### 4.4 Relative Bias: resolving ambiguous absolute positions across segments
 
 The bias is derived from clamped pairwise offsets between token position t and memory anchor p, indexed into a learnable per-head embedding table E:
-
-Attn(Q,K)=QK⊤dh+Brel,Brel={E[t−p]mem2tok (read)E[p−t]tok2mem (write)\text{Attn}(Q,K) = \frac{QK^\top}{\sqrt{d_h}} + B_{rel}, \quad B_{rel} = \begin{cases} E[t-p] & \text{mem2tok (read)} \\ E[p-t] & \text{tok2mem (write)} \end{cases}Attn(Q,K)=dh​​QK⊤​+Brel​,Brel​={E[t−p]E[p−t]​mem2tok (read)tok2mem (write)​
+$$
+\begin{gathered}
+\text{Attn}(Q,K) = \frac{QK^\top}{\sqrt{d_h}} + B_{rel} \\ \quad B_{rel} = \begin{cases} E[t-p] & \text{mem2tok (read)} \\ E[p-t] & \text{tok2mem (write)} \end{cases}
+\end{gathered}
+$$​
 
 > [!design-rationale] Using _relative_ rather than absolute time keeps the read/write bias meaningful even though the same token position can correspond to wildly different points in a trajectory once memory persists across many segments — the read and write paths share one embedding table but can still learn distinct temporal preferences.
 
-### 4.5 Theoretical Guarantees on the LRU Rule — is bounded capacity actually safe?
+Example: Layer has M=4 memory slots. Segment length K=10.
+
+**After segment 1** (steps 0–9): slot 1 gets written, anchor p₁ = 9 (last step of segment 1).  
+**After segment 2** (steps 10–19): slot 2 gets written, anchor p₂ = 19.  
+**After segment 3** (steps 20–29): slot 3 gets written, anchor p₃ = 29.  
+**After segment 4** (steps 30–39): slot 4 gets written, anchor p₄ = 39.
+
+Now we're in **segment 5**, and a token sits at global step **t = 45**.
+
+That token does mem2tok, it queries all 4 slots. The bias for each is Δ = t − p:
+
+| Slot | Anchor p | Offset Δ = t − p | Meaning                          |
+| ---- | -------- | ---------------- | -------------------------------- |
+| 1    | 9        | 36               | very stale, written 36 steps ago |
+| 2    | 19       | 26               | stale                            |
+| 3    | 29       | 16               | fairly recent                    |
+| 4    | 39       | 6                | very recent                      |
+
+Each of these offsets (36, 26, 16, 6) indexes into the same learned table E to pull out a per-head bias value E[Δ], which gets added to that slot's attention logit.
+### 4.5 Theoretical Guarantees on the LRU Rule: is bounded capacity actually safe?
 
 Algorithm 2 (§4.3) is backed by formal analysis in the paper:
 
-- _Exponential forgetting_ — after k overwrites, the original content's coefficient is (1−λ)^k, and a write performed τ updates ago contributes λ(1−λ)^{τ−1}; half-life k₀.₅ ≈ ln2/λ as λ→0.
-- _Effective horizon_ — H(ε) = M·L·ln(ε)/ln(1−λ), scaling linearly with both memory size M and segment length L.
-- _Memory boundedness_ — if every write and the initial memory are norm-bounded by C, every memory embedding stays within the closed ball of radius C for all time, by induction on the convex-combination structure of the update.
+- _Exponential forgetting_: after k overwrites, the original content's coefficient is $(1−λ)^k$, and a write performed τ updates ago contributes $λ(1−λ)^{τ−1}$
+- _Effective horizon_: $H(ε) = M·L·ln(ε)/ln(1−λ)$, scaling linearly with both memory size M and segment length L.
+- _Memory boundedness_: if every write and the initial memory are norm-bounded by C, every memory embedding stays within the closed ball of radius C for all time, by induction on the convex-combination structure of the update.
 
 ## 5. Benchmarks
 
@@ -135,9 +159,9 @@ Algorithm 2 (§4.3) is backed by formal analysis in the paper:
 
 ### 5.2 Benchmarks used
 
-- [[T-Maze]] — synthetic corridor task testing single-cue retention across corridors up to one million steps
-- [[MIKASA-Robo]] — sparse-reward robotic manipulation suite with RGB visual observations (RememberColor3/5/9-v0, TakeItBack-v0)
-- [[POPGym]] — 48-task suite of partially observable puzzles and control environments
+- [[T-Maze]]: synthetic corridor task testing single-cue retention across corridors up to one million steps
+- [[MIKASA-Robo]]: sparse-reward robotic manipulation suite with RGB visual observations (RememberColor3/5/9-v0, TakeItBack-v0)
+- [[POPGym]]: 48-task suite of partially observable puzzles and control environments
 
 ### 5.3 Results by task type
 
@@ -149,18 +173,21 @@ Algorithm 2 (§4.3) is backed by formal analysis in the paper:
 
 ## 6. Strengths
 
-- Retention horizon scales with memory size M and segment length L rather than sequence length, giving predictable, bounded compute cost even for million-step corridors.
-- Backed by formal guarantees (exponential forgetting, bounded memory norm) rather than purely empirical claims about long-horizon retention.
-- Consistent gains hold across three structurally different benchmark types (synthetic, visual robotic manipulation, puzzle/control), not just one narrow setting.
-- Comes with essentially no efficiency penalty — 2.1M parameters and 6.8ms/step, faster than RATE (7.2ms) and DT (10.7ms) despite the added memory machinery.
+- **Retention horizon scales with memory size M and segment length L** rather than sequence length, giving predictable, bounded compute cost even for million-step corridors.
+- **Backed by formal guarantees** (exponential forgetting, bounded memory norm) rather than purely empirical claims about long-horizon retention.
+- **Consistent gains hold across three structurally different benchmark types** (synthetic, visual robotic manipulation, puzzle/control), not just one narrow setting.
+- **Comes with essentially no efficiency penalty**: 2.1M parameters and 6.8ms/step, faster than RATE (7.2ms) and DT (10.7ms) despite the added memory machinery.
 
 ## 7. Gaps
 
-**Fixed, non-adaptive blending factor.** λ is a single tunable hyperparameter shared across all slots and the whole trajectory, and the ablations show intermediate λ (≈0.4–0.6) is unstable while under-provisioned memory (M<N) is highly sensitive to λ, σ, and segmentation. => Explore adaptive or per-slot blending rules that adjust plasticity based on content salience rather than a fixed global λ.
+- **Fixed, non-adaptive blending factor.** λ is a single tunable hyperparameter shared across all slots and the whole trajectory, and the ablations show intermediate λ (≈0.4–0.6) is unstable while under-provisioned memory (M<N) is highly sensitive to λ, σ, and segmentation.
+>	=> Explore adaptive or per-slot blending rules that adjust plasticity based on content salience rather than a fixed global λ.
 
-**Evaluation confined to simulation and imitation learning.** The paper explicitly omits real-robot experiments (to avoid latency/reset/safety confounds) and online RL baselines (incomparable training budgets), so all results are IL-from-demonstrations in simulated environments. => Extend evaluation to online RL and real-robot deployment, as the authors themselves flag in their limitations.
+- **Evaluation confined to simulation and imitation learning.** The paper explicitly omits real-robot experiments (to avoid latency/reset/safety confounds) and online RL baselines (incomparable training budgets), so all results are IL-from-demonstrations in simulated environments. 
+> 	=> Extend evaluation to online RL and real-robot deployment, as the authors themselves flag in their limitations.
 
-**Memory capacity must be manually matched to task structure.** Performance is near-perfect when M ≥ N (number of segments needed) but drops sharply when M < N, meaning practitioners must know or estimate the required number of segments in advance. => Investigate mechanisms for dynamically growing or reallocating memory slots when task-required capacity is unknown ahead of time.
+- **Memory capacity must be manually matched to task structure.** Performance is near-perfect when M ≥ N (number of segments needed) but drops sharply when M < N, meaning practitioners must know or estimate the required number of segments in advance. 
+> 	=> Investigate mechanisms for dynamically growing or reallocating memory slots when task-required capacity is unknown ahead of time.
 
 ## 8. Highlights
 
