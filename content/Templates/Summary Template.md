@@ -19,7 +19,7 @@ Other tags:
 |     |     |
 | --- | --- |
 |     |     |
-# 2. Paper Summary (What)
+# 2. Method Summary (What)
 TBD
 # 3. What it solves (Why)
 TBD
